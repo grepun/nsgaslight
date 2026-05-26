@@ -2,9 +2,9 @@
 """
 nsgaslight.py
 
-Check whether any IPs/ranges in List A overlap with List B.
+Check whether any IPs/ranges in the TARGET list overlap with the EXCLUSION list.
 
-Use case: client gave you a scope (List A) and an exclusion list (List B,
+Use case: client gave you a scope (TARGET) and an exclusion list (EXCLUSION,
 often incomplete or revised after the fact). Run this to catch any of your
 in-scope targets that fall inside their stated exclusions BEFORE testing —
 or to audit findings against a newly-produced "but that was excluded" list
@@ -14,20 +14,20 @@ Both lists may contain a mix of single IPs (10.1.2.3) and CIDR ranges
 (10.1.2.0/24), one entry per line. Blank lines and lines starting with #
 are ignored.
 
-A List A entry "matches" a List B entry if they share ANY address:
-  - single IP in A inside a CIDR in B
-  - single IP in A equal to single IP in B
-  - CIDR in A overlaps (fully or partially) with a CIDR in B
-  - CIDR in A contains a single IP in B
+A TARGET entry "matches" an EXCLUSION entry if they share ANY address:
+  - single IP in TARGET inside a CIDR in EXCLUSION
+  - single IP in TARGET equal to single IP in EXCLUSION
+  - CIDR in TARGET overlaps (fully or partially) with a CIDR in EXCLUSION
+  - CIDR in TARGET contains a single IP in EXCLUSION
 
 Usage:
-    python3 nsgaslight.py <list_a> <list_b>
-    python3 nsgaslight.py scope.txt exclusions.txt
-    python3 nsgaslight.py scope.txt exclusions.txt --quiet
-    python3 nsgaslight.py scope.txt exclusions.txt --only-matches
+    python3 nsgaslight.py <target> <exclusion>                    # simple  -> stdout
+    python3 nsgaslight.py <target> <exclusion> -v                 # verbose -> stdout
+    python3 nsgaslight.py <target> <exclusion> -o results.txt     # simple  -> file
+    python3 nsgaslight.py <target> <exclusion> -o results.txt -v  # verbose -> file
 
 Exit codes:
-    0  no overlap found (List A is clean)
+    0  no overlap found (TARGET is clean)
     1  one or more overlaps found
     2  usage / file error
 """
@@ -67,14 +67,14 @@ def load_list(path: Path, label: str):
     return entries
 
 
-def find_overlaps(list_a, list_b):
-    """For each entry in A, return matching entries from B."""
+def find_overlaps(targets, exclusions):
+    """For each target entry, return matching exclusion entries."""
     results = []
-    for a_token, a_lineno, a_net in list_a:
-        matches = [(b_token, b_lineno, b_net)
-                   for b_token, b_lineno, b_net in list_b
-                   if a_net.overlaps(b_net)]
-        results.append((a_token, a_lineno, a_net, matches))
+    for t_token, t_lineno, t_net in targets:
+        matches = [(e_token, e_lineno, e_net)
+                   for e_token, e_lineno, e_net in exclusions
+                   if t_net.overlaps(e_net)]
+        results.append((t_token, t_lineno, t_net, matches))
     return results
 
 
@@ -91,50 +91,71 @@ def describe_overlap(a_net, b_net):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Find IPs/CIDRs from List A that overlap with List B.",
+        description="Find IPs/CIDRs in the target list that overlap with the exclusion list.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Lists may contain single IPs (10.1.2.3) or CIDR (10.1.2.0/24).")
-    p.add_argument("list_a", help="Targets / scope (IPs and/or CIDRs)")
-    p.add_argument("list_b", help="Exclusions (IPs and/or CIDRs)")
-    p.add_argument("-q", "--quiet", action="store_true",
-                   help="Suppress per-entry 'clean' lines; show matches + summary only.")
-    p.add_argument("-m", "--only-matches", action="store_true",
-                   help="Only print the matched List A entries, one per line. "
-                        "Good for piping into other tools.")
+    p.add_argument("target", help="Target / scope list (IPs and/or CIDRs)")
+    p.add_argument("exclusion", help="Exclusion list (IPs and/or CIDRs)")
+    p.add_argument("-o", "--output", metavar="FILE",
+                   help="Write results to FILE instead of stdout.")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="Verbose format: show which exclusion entry caught "
+                        "each target, plus a summary line. Default is to "
+                        "list matched target IPs only.")
     args = p.parse_args()
 
-    list_a = load_list(Path(args.list_a), "List A")
-    list_b = load_list(Path(args.list_b), "List B")
+    targets = load_list(Path(args.target), "TARGET")
+    exclusions = load_list(Path(args.exclusion), "EXCLUSION")
 
-    if not list_a:
-        print("[!] List A is empty after parsing.", file=sys.stderr)
+    if not targets:
+        print("[!] TARGET list is empty after parsing.", file=sys.stderr)
         sys.exit(2)
-    if not list_b:
-        print("[!] List B is empty after parsing.", file=sys.stderr)
+    if not exclusions:
+        print("[!] EXCLUSION list is empty after parsing.", file=sys.stderr)
         sys.exit(2)
 
-    results = find_overlaps(list_a, list_b)
+    results = find_overlaps(targets, exclusions)
     matched = [r for r in results if r[3]]
 
-    if args.only_matches:
-        for a_token, _, _, _ in matched:
-            print(a_token)
-        sys.exit(1 if matched else 0)
+    # Build the output as a list of lines based on format choice
+    lines = []
+    if not args.verbose:
+        # Default: simple - matched target IPs only (suitable for piping)
+        for t_token, _, _, _ in matched:
+            lines.append(t_token)
+    else:
+        # Verbose: full table - every target, matched or clear, plus summary.
+        # Column widths include ALL targets so clean rows align with matched.
+        t_width = max((len(t_token) for t_token, _, _, _ in results),
+                      default=0)
+        e_width = max(
+            [len(e_token) for _, _, _, ms in results for e_token, _, _ in ms]
+            + [len("clear")],
+            default=0)
 
-    # Full human-readable report
-    for a_token, a_lineno, a_net, matches in results:
-        if matches:
-            print(f"[X] {a_token}  (List A line {a_lineno})  -> EXCLUDED")
-            for b_token, b_lineno, b_net in matches:
-                print(f"      matches List B line {b_lineno}: {b_token}"
-                      f"   [{describe_overlap(a_net, b_net)}]")
-        elif not args.quiet:
-            print(f"[ok] {a_token}  (List A line {a_lineno})")
+        for t_token, t_lineno, t_net, ms in results:
+            if not ms:
+                lines.append(f"{t_token:<{t_width}}  →  clear")
+                continue
+            for i, (e_token, e_lineno, e_net) in enumerate(ms):
+                target_col = t_token if i == 0 else ""
+                partial = (t_net != e_net) and (not t_net.subnet_of(e_net))
+                note = ", partial" if partial else ""
+                lines.append(f"{target_col:<{t_width}}  →  "
+                             f"{e_token:<{e_width}}  (line {e_lineno}{note})")
 
-    # Summary
-    print()
-    print(f"Summary: {len(matched)} of {len(list_a)} List A entries "
-          f"overlap with List B ({len(list_b)} exclusion entries loaded).")
+        lines.append("")
+        lines.append(f"{len(matched)}/{len(targets)} excluded · "
+                     f"{len(exclusions)} exclusions loaded")
+
+    output_text = "\n".join(lines) + ("\n" if lines else "")
+
+    if args.output:
+        Path(args.output).write_text(output_text, encoding="utf-8")
+        print(f"[+] Wrote {len(matched)}/{len(targets)} excluded entries "
+              f"to {args.output}")
+    else:
+        sys.stdout.write(output_text)
 
     sys.exit(1 if matched else 0)
 
