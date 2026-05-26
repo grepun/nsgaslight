@@ -1,30 +1,6 @@
 #!/usr/bin/env python3
 """
-nsgaslight.py
-
-Check whether any IPs/ranges in the TARGET list overlap with the EXCLUSION list.
-
-Use case: client gave you a scope (TARGET) and an exclusion list (EXCLUSION,
-often incomplete or revised after the fact). Run this to catch any of your
-in-scope targets that fall inside their stated exclusions BEFORE testing —
-or to audit findings against a newly-produced "but that was excluded" list
-AFTER the fact, so you've got receipts before the dispute meeting.
-
-Both lists may contain a mix of single IPs (10.1.2.3) and CIDR ranges
-(10.1.2.0/24), one entry per line. Blank lines and lines starting with #
-are ignored.
-
-A TARGET entry "matches" an EXCLUSION entry if they share ANY address:
-  - single IP in TARGET inside a CIDR in EXCLUSION
-  - single IP in TARGET equal to single IP in EXCLUSION
-  - CIDR in TARGET overlaps (fully or partially) with a CIDR in EXCLUSION
-  - CIDR in TARGET contains a single IP in EXCLUSION
-
-Usage:
-    python3 nsgaslight.py <target> <exclusion>                    # simple  -> stdout
-    python3 nsgaslight.py <target> <exclusion> -v                 # verbose -> stdout
-    python3 nsgaslight.py <target> <exclusion> -o results.txt     # simple  -> file
-    python3 nsgaslight.py <target> <exclusion> -o results.txt -v  # verbose -> file
+nsgaslight.py — find IPs/CIDRs in a TARGET list that overlap with an EXCLUSION list.
 
 Exit codes:
     0  no overlap found (TARGET is clean)
